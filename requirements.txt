@@ -1,0 +1,8 @@
+flask
+paho-mqtt
+torch
+torchvision
+scikit-learn
+pillow
+joblib
+gunicorn
