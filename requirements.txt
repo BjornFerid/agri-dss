@@ -6,5 +6,4 @@ pillow
 joblib
 gunicorn
 numpy
-encodings
 idna
