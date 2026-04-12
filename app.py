@@ -39,7 +39,7 @@ state = {"latest": {}, "hw_active": False}
 def predict_crop(p):
     if rf_model is None:
         return {"crop": random.choice(CROP_CLASSES), "confidence": round(random.uniform(80,99),2)}
-    X   = np.array([[p["N"],p["P"],p["K"],p["pH"],p["moist"],p["temp"],p["hum"]]])
+    X   = np.array([[p["N"],p["P"],p["K"],p["temp"],p["moist"],p["pH"]]])
     idx = rf_model.predict(X)[0]
     crop = idx if isinstance(idx,str) else (CROP_CLASSES[int(idx)] if int(idx)<len(CROP_CLASSES) else "unknown")
     try:    conf = round(float(rf_model.predict_proba(X)[0].max())*100,2)
