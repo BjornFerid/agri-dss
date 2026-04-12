@@ -1,13 +1,8 @@
-import os
-import json
-import base64
-import threading
-import random
-import time
-import io
-import pickle
-import numpy as np
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-import paho.mqtt.client as mqtt
-from PIL import Image
+flask
+flask-cors
+paho-mqtt
+scikit-learn==1.6.1
+pillow
+joblib
+gunicorn
+numpy
