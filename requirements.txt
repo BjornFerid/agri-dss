@@ -1,4 +1,5 @@
 flask
+flask-cors
 paho-mqtt
 torch
 torchvision
@@ -6,3 +7,4 @@ scikit-learn
 pillow
 joblib
 gunicorn
+numpy

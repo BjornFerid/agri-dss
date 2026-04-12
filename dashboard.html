@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Agri-Tech DSS Dashboard</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --green:  #1a7a4a;
+    --green-light: #e8f5ee;
+    --amber:  #b45309;
+    --amber-light: #fef3c7;
+    --red:    #b91c1c;
+    --red-light: #fee2e2;
+    --blue:   #1d4ed8;
+    --blue-light: #eff6ff;
+    --text:   #1f2937;
+    --muted:  #6b7280;
+    --border: #e5e7eb;
+    --bg:     #f9fafb;
+    --card:   #ffffff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--text); font-size: 15px; }
+  header { background: var(--green); color: #fff; padding: 16px 24px;
+           display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  #status-dot { width: 10px; height: 10px; border-radius: 50%;
+                background: #f87171; display: inline-block; margin-right: 6px; }
+  #status-dot.live { background: #4ade80; }
+  #status-text { font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          gap: 16px; padding: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 12px; padding: 18px; }
+  .card-title { font-size: 12px; font-weight: 600; text-transform: uppercase;
+                letter-spacing: 0.06em; color: var(--muted); margin-bottom: 14px; }
+  /* Sensor grid */
+  .sensor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sensor-item { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+  .sensor-label { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .sensor-value { font-size: 20px; font-weight: 600; }
+  /* Recommendation banner */
+  .rec-banner { border-radius: 10px; padding: 16px 20px;
+                display: flex; align-items: center; gap: 14px; }
+  .rec-banner.crop { background: var(--green-light); }
+  .rec-banner.disease { background: var(--amber-light); }
+  .rec-banner.disease.healthy { background: var(--green-light); }
+  .rec-banner.disease.danger { background: var(--red-light); }
+  .rec-icon { font-size: 32px; }
+  .rec-label { font-size: 11px; color: var(--muted); }
+  .rec-name { font-size: 22px; font-weight: 700; margin: 2px 0; }
+  .rec-conf { font-size: 12px; color: var(--muted); }
+  /* Confidence bar */
+  .bar-wrap { background: var(--border); border-radius: 999px; height: 6px; margin-top: 8px; }
+  .bar { height: 6px; border-radius: 999px; background: var(--green); transition: width 0.6s; }
+  /* Log */
+  #log { height: 180px; overflow-y: auto; font-size: 12px; font-family: monospace;
+         background: #0f172a; color: #94a3b8; border-radius: 8px;
+         padding: 10px 12px; line-height: 1.7; }
+  #log .ts { color: #4ade80; }
+  #log .err { color: #f87171; }
+  /* Source badge */
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px;
+           border-radius: 999px; font-weight: 500; }
+  .badge.sim { background: var(--amber-light); color: var(--amber); }
+  .badge.hw  { background: var(--green-light);  color: var(--green); }
+  /* Timestamp */
+  #ts-label { font-size: 12px; color: var(--muted); margin-top: 10px; text-align: right; }
+  /* Refresh notice */
+  #refresh-notice { display: none; background: var(--blue-light); color: var(--blue);
+                    font-size: 13px; padding: 10px 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌾 Agri-Tech DSS — Real-Time Dashboard</h1>
+  <div>
+    <span id="status-dot"></span>
+    <span id="status-text">Connecting…</span>
+  </div>
+</header>
+
+<div id="refresh-notice">
+  New data available — <a href="javascript:location.reload()" style="color:var(--blue);font-weight:600;">Refresh to update</a>
+</div>
+
+<div class="grid">
+
+  <!-- Sensor Readings -->
+  <div class="card">
+    <div class="card-title">Sensor Readings</div>
+    <div class="sensor-grid">
+      <div class="sensor-item">
+        <div class="sensor-label">Nitrogen (N)</div>
+        <div class="sensor-value" id="s-N">—</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Phosphorus (P)</div>
+        <div class="sensor-value" id="s-P">—</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Potassium (K)</div>
+        <div class="sensor-value" id="s-K">—</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">pH</div>
+        <div class="sensor-value" id="s-pH">—</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Moisture (%)</div>
+        <div class="sensor-value" id="s-moist">—</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Temperature (°C)</div>
+        <div class="sensor-value" id="s-temp">—</div>
+      </div>
+      <div class="sensor-item" style="grid-column: span 2;">
+        <div class="sensor-label">Humidity (%)</div>
+        <div class="sensor-value" id="s-hum">—</div>
+      </div>
+    </div>
+    <p id="ts-label">No data yet</p>
+  </div>
+
+  <!-- Crop Recommendation -->
+  <div class="card">
+    <div class="card-title">Crop Recommendation <span id="source-badge" class="badge"></span></div>
+    <div class="rec-banner crop" id="crop-banner">
+      <div class="rec-icon">🌱</div>
+      <div>
+        <div class="rec-label">Recommended Crop</div>
+        <div class="rec-name" id="crop-name">Waiting…</div>
+        <div class="rec-conf" id="crop-conf"></div>
+        <div class="bar-wrap"><div class="bar" id="crop-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Disease Analysis -->
+  <div class="card">
+    <div class="card-title">Foliage Disease Analysis</div>
+    <div class="rec-banner disease" id="disease-banner">
+      <div class="rec-icon" id="disease-icon">🔍</div>
+      <div>
+        <div class="rec-label">Detected Condition</div>
+        <div class="rec-name" id="disease-name">Waiting…</div>
+        <div class="rec-conf" id="disease-conf"></div>
+        <div class="bar-wrap"><div class="bar" id="disease-bar" style="width:0%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-title">System Event Log</div>
+    <div id="log"><span style="color:#4ade80">[SYS]</span> Dashboard initialized. Connecting to MQTT…</div>
+  </div>
+
+</div>
+
+<script>
+  // ── State lock: prevents UI flicker after first real data arrives ────────
+  let hasData = false;
+  let pendingData = null;
+
+  // ── MQTT setup ────────────────────────────────────────────────────────────
+  const BROKER    = "wss://broker.hivemq.com:8884/mqtt";
+  const TOPIC     = "agri/decision";
+  const clientId  = "dashboard-" + Math.random().toString(16).slice(2, 8);
+
+  const client = mqtt.connect(BROKER, { clientId, clean: true });
+
+  client.on("connect", () => {
+    setStatus(true);
+    log("SYS", `Connected to ${BROKER}`);
+    client.subscribe(TOPIC, err => {
+      if (!err) log("SYS", `Subscribed to ${TOPIC}`);
+    });
+  });
+
+  client.on("error", err => {
+    setStatus(false);
+    log("ERR", err.message);
+  });
+
+  client.on("offline", () => setStatus(false));
+
+  client.on("message", (topic, payload) => {
+    try {
+      const data = JSON.parse(payload.toString());
+      if (!hasData) {
+        hasData = true;
+        renderDecision(data);
+        log("DATA", `First packet — crop: ${data.crop_recommendation.crop}`);
+      } else {
+        // State-lock: show refresh notice instead of flickering UI
+        pendingData = data;
+        document.getElementById("refresh-notice").style.display = "block";
+        log("DATA", `New data queued (refresh to apply) — crop: ${data.crop_recommendation.crop}`);
+      }
+    } catch (e) {
+      log("ERR", "Failed to parse payload: " + e.message);
+    }
+  });
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function renderDecision(d) {
+    const sd = d.sensor_data || {};
+    setText("s-N",     sd.N     ?? "—");
+    setText("s-P",     sd.P     ?? "—");
+    setText("s-K",     sd.K     ?? "—");
+    setText("s-pH",    sd.pH    ?? "—");
+    setText("s-moist", sd.moisture    ?? "—");
+    setText("s-temp",  sd.temperature ?? "—");
+    setText("s-hum",   sd.humidity    ?? "—");
+
+    const ts = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : "—";
+    setText("ts-label", "Last updated: " + ts);
+
+    // Source badge
+    const badge = document.getElementById("source-badge");
+    if (d.source === "simulation") {
+      badge.className = "badge sim"; badge.textContent = "Simulated";
+    } else {
+      badge.className = "badge hw";  badge.textContent = "Hardware";
+    }
+
+    // Crop
+    const cr = d.crop_recommendation || {};
+    setText("crop-name", capitalize(cr.crop || "Unknown"));
+    setText("crop-conf", `Confidence: ${cr.confidence ?? 0}%`);
+    document.getElementById("crop-bar").style.width = (cr.confidence ?? 0) + "%";
+
+    // Disease
+    const dr = d.disease_analysis || {};
+    const isHealthy = (dr.disease || "").toLowerCase() === "healthy";
+    setText("disease-name", dr.disease || "Unknown");
+    setText("disease-conf", `Confidence: ${dr.confidence ?? 0}%`);
+    document.getElementById("disease-bar").style.width = (dr.confidence ?? 0) + "%";
+    const db = document.getElementById("disease-banner");
+    db.className = "rec-banner disease" + (isHealthy ? " healthy" : " danger");
+    setText("disease-icon", isHealthy ? "✅" : "⚠️");
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function setStatus(online) {
+    document.getElementById("status-dot").className = online ? "live" : "";
+    document.getElementById("status-text").textContent = online ? "Live" : "Disconnected";
+  }
+
+  function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  function capitalize(s) {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function log(type, msg) {
+    const box = document.getElementById("log");
+    const now = new Date().toLocaleTimeString();
+    const cls = type === "ERR" ? "err" : "ts";
+    box.innerHTML += `\n<span class="${cls}">[${type} ${now}]</span> ${msg}`;
+    box.scrollTop = box.scrollHeight;
+  }
+</script>
+</body>
+</html>
