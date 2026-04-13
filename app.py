@@ -15,7 +15,7 @@ PORT_MQTT = 1883
 PUB_TOPIC = "agri/decision"
 SUB_TOPIC = "agri/sensors"
 
-# ── Updated Class List (Strict Alphabetical Order per PyTorch ImageFolder) ──
+# ── Updated Class List (Strict Alphabetical Order) ──
 CROP_CLASSES = [
     "apple","banana","blackgram","chickpea","coconut","coffee","cotton",
     "grapes","jute","kidneybeans","lentil","maize","mango","mothbeans",
@@ -23,7 +23,6 @@ CROP_CLASSES = [
     "rice","watermelon"
 ]
 
-# CRITICAL: These MUST match your folder names in 'split_dataset/train' alphabetically
 DISEASE_CLASSES = [
     "Apple___Apple_scab",
     "Apple___Black_rot",
@@ -61,28 +60,22 @@ def is_hw_active_and_clear():
     except: pass
     return False
 
-# ── Image Preprocessing (Updated to match Training 'test' transform) ──
+# ── Image Preprocessing (Center Crop) ──
 IMG_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMG_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 def preprocess_image(b64_str):
     img_bytes = base64.b64decode(b64_str)
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    
-    # 1. Resize to 256 (matches training Resize(256))
     img = img.resize((256, 256))
-    
-    # 2. Center Crop to 224 (matches training CenterCrop(224))
     left = (256 - 224) / 2
     top = (256 - 224) / 2
     right = (256 + 224) / 2
     bottom = (256 + 224) / 2
     img = img.crop((left, top, right, bottom))
-    
-    # 3. Normalize
     arr = np.array(img, dtype=np.float32) / 255.0
     arr = (arr - IMG_MEAN) / IMG_STD
-    arr = arr.transpose(2,0,1)          # HWC → CHW
+    arr = arr.transpose(2,0,1)
     return arr[np.newaxis, ...].astype(np.float32)
 
 # ── Load Models ──
@@ -95,11 +88,17 @@ try:
 except: pass
 
 onnx_session = None
+ONNX_PATH = "disease_resnet18.onnx" # MAKE SURE THIS MATCHES YOUR FILENAME
+
 try:
     import onnxruntime as ort
-    if os.path.exists("disease_resnet18.onnx"):
-        onnx_session = ort.InferenceSession("disease_resnet18.onnx", providers=["CPUExecutionProvider"])
-except: pass
+    if os.path.exists(ONNX_PATH):
+        onnx_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
+        print(f"[SUCCESS] Loaded {ONNX_PATH}")
+    else:
+        print(f"[ERROR] File {ONNX_PATH} not found in root directory!")
+except Exception as e:
+    print(f"[ERROR] Could not initialize ONNX: {e}")
 
 def softmax(x):
     e = np.exp(x - np.max(x))
@@ -117,10 +116,14 @@ def predict_crop(p):
             except: conf = round(random.uniform(80,99),2)
             return {"crop": crop, "confidence": conf, "source": "model"}
     except: pass
-    return {"crop": random.choice(CROP_CLASSES), "confidence": 0, "source": "error"}
+    return {"crop": "Unknown", "confidence": 0, "source": "error"}
 
 def predict_disease(b64_str):
-    if onnx_session and b64_str:
+    if onnx_session is None:
+        print("[FAIL] predict_disease called but onnx_session is None")
+        return {"disease": "Model Not Loaded", "confidence": 0, "source": "error"}
+        
+    if b64_str:
         try:
             tensor = preprocess_image(b64_str)
             outputs = onnx_session.run(["output"], {"input": tensor})[0]
@@ -129,9 +132,10 @@ def predict_disease(b64_str):
             conf    = round(float(probs[idx])*100, 2)
             return {"disease": DISEASE_CLASSES[idx], "confidence": conf, "source": "model"}
         except Exception as e:
-            print(f"Inference Error: {e}")
+            print(f"[FAIL] Inference Error: {e}")
+            return {"disease": f"Error: {str(e)[:20]}", "confidence": 0, "source": "error"}
     
-    return {"disease": "Unknown", "confidence": 0, "source": "error"}
+    return {"disease": "No Image Data", "confidence": 0, "source": "error"}
 
 def make_decision(p, source="simulation"):
     return {
@@ -152,11 +156,13 @@ def start_mqtt():
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
         client.on_connect = lambda c,u,f,rc: c.subscribe(SUB_TOPIC)
         def on_msg(c,u,msg):
-            p = json.loads(msg.payload.decode())
-            set_hw_active()
-            d = make_decision(p,"hardware")
-            write_state(d)
-            c.publish(PUB_TOPIC, json.dumps(d))
+            try:
+                p = json.loads(msg.payload.decode())
+                set_hw_active()
+                d = make_decision(p,"hardware")
+                write_state(d)
+                c.publish(PUB_TOPIC, json.dumps(d))
+            except: pass
         client.on_message = on_msg
         client.connect(BROKER,PORT_MQTT,60)
         client.loop_start()
@@ -187,6 +193,7 @@ def upload_predict():
     try:
         img_bytes = request.files['file'].read()
         b64_img = base64.b64encode(img_bytes).decode('utf-8')
+        # Return the prediction result directly
         return jsonify(predict_disease(b64_img))
     except Exception as e: return jsonify({"error": str(e)}), 500
 
