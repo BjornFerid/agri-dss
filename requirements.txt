@@ -9,3 +9,4 @@ numpy
 idna
 torch
 torchvision
+onnxruntime==1.15.1
