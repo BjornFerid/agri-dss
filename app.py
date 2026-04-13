@@ -15,7 +15,7 @@ PORT_MQTT = 1883
 PUB_TOPIC = "agri/decision"
 SUB_TOPIC = "agri/sensors"
 
-# ── Exact classes from your trained models ─────────────────────────────────
+# -- Exact classes from your trained models --
 CROP_CLASSES = [
     "apple","banana","blackgram","chickpea","coconut","coffee","cotton",
     "grapes","jute","kidneybeans","lentil","maize","mango","mothbeans",
@@ -23,9 +23,6 @@ CROP_CLASSES = [
     "rice","watermelon"
 ]
 
-# ── Replace these with your actual 8 disease class names ──────────────────
-# Check your training notebook for the exact names and order
-# They must match the order used during training (folder names or label list)
 DISEASE_CLASSES = [
     "Apple__Apple_scab",
     "Apple__Black_rot",
@@ -62,7 +59,7 @@ def is_hw_active_and_clear():
     except: pass
     return False
 
-# ── Image preprocessing (same as training) ─────────────────────────────────
+# -- Image preprocessing --
 IMG_MEAN = np.array([0.485,0.456,0.406], dtype=np.float32)
 IMG_STD  = np.array([0.229,0.224,0.225], dtype=np.float32)
 
@@ -72,9 +69,9 @@ def preprocess_image(b64_str):
     arr = np.array(img, dtype=np.float32) / 255.0
     arr = (arr - IMG_MEAN) / IMG_STD
     arr = arr.transpose(2,0,1)          # HWC → CHW
-    return arr[np.newaxis, ...].astype(np.float32)  # add batch dim
+    return arr[np.newaxis, ...].astype(np.float32)
 
-# ── Load Random Forest ──────────────────────────────────────────────────────
+# -- Load Random Forest --
 rf_model = None
 try:
     for _p in ["crop_model.pkl","crop_rf_model.pkl","crop_rf_model.joblib"]:
@@ -82,27 +79,24 @@ try:
             with open(_p,"rb") as f: rf_model = pickle.load(f)
             print(f"[ML] RF loaded from {_p}", flush=True)
             break
-    if rf_model is None: print("[ML] No RF model found", flush=True)
 except Exception as e:
     print(f"[ML] RF load error: {e}", flush=True)
 
-# ── Load ONNX disease model ────────────────────────────────────────────────
+# -- Load ONNX disease model --
 onnx_session = None
 try:
     import onnxruntime as ort
     onnx_path = "disease_resnet18.onnx"
     if os.path.exists(onnx_path):
-        onnx_session = ort.InferenceSession(onnx_path,
-            providers=["CPUExecutionProvider"])
+        onnx_session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
         print(f"[ML] ONNX disease model loaded ✅", flush=True)
-    else:
-        print("[ML] disease_resnet18.onnx not found — using fallback", flush=True)
-except ImportError:
-    print("[ML] onnxruntime not installed", flush=True)
 except Exception as e:
     print(f"[ML] ONNX load error: {e}", flush=True)
 
-# ── Inference ───────────────────────────────────────────────────────────────
+def softmax(x):
+    e = np.exp(x - np.max(x))
+    return e / e.sum()
+
 def predict_crop(p):
     try:
         if rf_model is not None:
@@ -115,11 +109,9 @@ def predict_crop(p):
             return {"crop": crop, "confidence": conf, "source": "model"}
     except Exception as e:
         print(f"[ML] crop predict error: {e}", flush=True)
-    return {"crop": random.choice(CROP_CLASSES),
-            "confidence": round(random.uniform(70,90),2), "source": "random"}
+    return {"crop": random.choice(CROP_CLASSES), "confidence": round(random.uniform(70,90),2), "source": "random"}
 
 def predict_disease(b64_str):
-    # Use real ONNX model if available
     if onnx_session and b64_str:
         try:
             tensor = preprocess_image(b64_str)
@@ -130,40 +122,30 @@ def predict_disease(b64_str):
             return {"disease": DISEASE_CLASSES[idx], "confidence": conf, "source": "model"}
         except Exception as e:
             print(f"[ML] disease predict error: {e}", flush=True)
-
-    # Fallback — random (until ONNX model is uploaded)
+    
     idx = random.randint(0,7)
-    return {"disease": DISEASE_CLASSES[idx],
-            "confidence": round(random.uniform(70,95),2), "source": "random"}
-
-def softmax(x):
-    e = np.exp(x - np.max(x))
-    return e / e.sum()
+    return {"disease": DISEASE_CLASSES[idx], "confidence": round(random.uniform(70,95),2), "source": "random"}
 
 def make_decision(p, source="simulation"):
     return {
         "timestamp":           time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
         "source":              source,
         "sensor_data":         {
-            "N":           p.get("N",0),   "P":   p.get("P",0),
-            "K":           p.get("K",0),   "pH":  p.get("pH",0),
-            "moisture":    p.get("moist",0),
-            "temperature": p.get("temp",0),
-            "humidity":    p.get("hum",0)
+            "N": p.get("N",0), "P": p.get("P",0), "K": p.get("K",0), 
+            "pH": p.get("pH",0), "moisture": p.get("moist",0),
+            "temperature": p.get("temp",0), "humidity": p.get("hum",0)
         },
         "crop_recommendation": predict_crop(p),
         "disease_analysis":    predict_disease(p.get("image_base64",""))
     }
 
-# ── MQTT ────────────────────────────────────────────────────────────────────
+# -- MQTT --
 _mc = None
-
 def start_mqtt():
     global _mc
     try:
         _mc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
         def on_connect(c,u,f,rc):
-            print(f"[MQTT] Connected rc={rc}", flush=True)
             c.subscribe(SUB_TOPIC)
         def on_message(c,u,msg):
             try:
@@ -172,53 +154,57 @@ def start_mqtt():
                 d = make_decision(p,"hardware")
                 write_state(d)
                 c.publish(PUB_TOPIC, json.dumps(d))
-                print(f"[MQTT] hw → crop={d['crop_recommendation']['crop']}", flush=True)
-            except Exception as e: print(f"[MQTT] {e}", flush=True)
+            except: pass
         _mc.on_connect = on_connect
         _mc.on_message = on_message
         _mc.connect(BROKER,PORT_MQTT,60)
         _mc.loop_start()
-        print("[MQTT] Started", flush=True)
-    except Exception as e:
-        print(f"[MQTT] Failed: {e}", flush=True)
+    except: pass
 
 def simulate():
     time.sleep(3)
-    print("[SIM] Thread running", flush=True)
     while True:
         time.sleep(5)
         if not is_hw_active_and_clear():
             p = {
-                "N":    random.randint(0,140),  "P":    random.randint(5,145),
-                "K":    random.randint(5,205),   "pH":   round(random.uniform(3.5,9.5),1),
-                "moist":random.randint(10,100),  "temp": round(random.uniform(8.0,44.0),1),
-                "hum":  random.randint(14,100),  "image_base64": ""
+                "N": random.randint(0,140), "P": random.randint(5,145),
+                "K": random.randint(5,205), "pH": round(random.uniform(3.5,9.5),1),
+                "moist": random.randint(10,100), "temp": round(random.uniform(8.0,44.0),1),
+                "hum": random.randint(14,100), "image_base64": ""
             }
             d = make_decision(p,"simulation")
             write_state(d)
             if _mc:
                 try: _mc.publish(PUB_TOPIC, json.dumps(d))
                 except: pass
-            print(f"[SIM] crop={d['crop_recommendation']['crop']} "
-                  f"conf={d['crop_recommendation']['confidence']} "
-                  f"disease={d['disease_analysis']['disease']}", flush=True)
-        else:
-            state["hw_active"] = False
 
-print("[APP] Starting...", flush=True)
 start_mqtt()
 threading.Thread(target=simulate, daemon=True).start()
-print("[APP] Threads launched", flush=True)
 
-# ── Routes ───────────────────────────────────────────────────────────────────
+# -- Routes --
 @app.route("/")
 def index(): return jsonify({"status":"Agri-DSS running"})
 
-@app.route("/health")
-def health(): return jsonify({"status":"ok"})
-
 @app.route("/latest")
 def latest(): return jsonify(read_state())
+
+# NEW ROUTE: This handles the dashboard image upload
+@app.route("/predict_disease", methods=["POST"])
+def upload_predict():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file"}), 400
+    
+    file = request.files['file']
+    try:
+        # Convert uploaded file to Base64 to reuse your existing logic
+        img_bytes = file.read()
+        b64_img = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # Run inference
+        result = predict_disease(b64_img)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/infer", methods=["POST"])
 def infer(): return jsonify(make_decision(request.get_json(force=True),"api"))
