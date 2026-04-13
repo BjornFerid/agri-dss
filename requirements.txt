@@ -7,3 +7,5 @@ joblib
 gunicorn
 numpy
 idna
+torch
+torchvision
