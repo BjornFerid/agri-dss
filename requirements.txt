@@ -1,12 +1,5 @@
 flask
 flask-cors
-paho-mqtt
-scikit-learn==1.6.1
+onnxruntime
 pillow
-joblib
-gunicorn
 numpy
-idna
-torch
-torchvision
-onnxruntime==1.15.1
