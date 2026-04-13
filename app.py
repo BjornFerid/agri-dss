@@ -17,18 +17,31 @@ DISEASE_CLASSES = [
     "Corn_(maize)___Northern_Leaf_Blight", "Corn_(maize)___healthy"
 ]
 
-# ── MODEL LOADING ──
+# ── SMART MODEL LOADING ──
 onnx_session = None
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ONNX_PATH = os.path.join(BASE_DIR, "disease_resnet18.onnx")
+MODEL_FILENAME = "disease_resnet18.onnx"
+
+def find_model_path(name):
+    """Search for the model file in the current directory and subdirectories."""
+    for root, dirs, files in os.walk("."):
+        if name in files:
+            return os.path.join(root, name)
+    return None
 
 try:
     import onnxruntime as ort
-    if os.path.exists(ONNX_PATH):
+    ONNX_PATH = find_model_path(MODEL_FILENAME)
+    
+    if ONNX_PATH:
         onnx_session = ort.InferenceSession(ONNX_PATH, providers=["CPUExecutionProvider"])
-        print(f"[SUCCESS] Model loaded from {ONNX_PATH}", flush=True)
+        print(f"[SUCCESS] Model found and loaded from: {ONNX_PATH}", flush=True)
     else:
-        print(f"[ERROR] {ONNX_PATH} NOT FOUND!", flush=True)
+        # Final fallback check in root
+        if os.path.exists(MODEL_FILENAME):
+            onnx_session = ort.InferenceSession(MODEL_FILENAME, providers=["CPUExecutionProvider"])
+            print(f"[SUCCESS] Model loaded from root", flush=True)
+        else:
+            print(f"[ERROR] {MODEL_FILENAME} NOT FOUND ANYWHERE IN REPO", flush=True)
 except Exception as e:
     print(f"[ERROR] ONNX Init failed: {e}", flush=True)
 
@@ -38,11 +51,12 @@ IMG_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 def predict_disease(b64_str):
     if onnx_session is None:
-        return {"disease": "Model file missing", "confidence": 0, "source": "error"}
+        return {"disease": "Model file missing on server", "confidence": 0, "source": "error"}
     try:
         img_bytes = base64.b64decode(b64_str)
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB").resize((256, 256))
-        # Center Crop
+        
+        # Center Crop logic (256 -> 224)
         l, t, r, b = (256-224)/2, (256-224)/2, (256+224)/2, (256+224)/2
         img = img.crop((l, t, r, b))
         
@@ -53,6 +67,7 @@ def predict_disease(b64_str):
         input_name = onnx_session.get_inputs()[0].name
         outputs = onnx_session.run(None, {input_name: arr})[0]
         
+        # Softmax & Result
         exp_scores = np.exp(outputs[0] - np.max(outputs[0]))
         probs = exp_scores / exp_scores.sum()
         idx = int(probs.argmax())
@@ -63,11 +78,16 @@ def predict_disease(b64_str):
             "source": "model"
         }
     except Exception as e:
-        return {"disease": f"Inference Error", "confidence": 0, "source": "error"}
+        return {"disease": "Inference Error", "confidence": 0, "source": "error"}
 
+# ── ROUTES ──
 @app.route("/")
 def index():
-    return jsonify({"status": "running", "model_loaded": onnx_session is not None})
+    return jsonify({
+        "status": "running", 
+        "model_loaded": onnx_session is not None,
+        "search_path": os.getcwd()
+    })
 
 @app.route("/latest")
 def latest():
