@@ -1,7 +1,6 @@
 flask
 flask-cors
-onnxruntime
+onnxruntime-lite
 pillow
 numpy
-paho-mqtt
 gunicorn
