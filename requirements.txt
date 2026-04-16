@@ -1,7 +1,10 @@
 flask
 flask-cors
-onnxruntime==1.17.1
-pillow
-numpy<2.0.0
 paho-mqtt
+scikit-learn==1.6.1
+pillow
+joblib
 gunicorn
+numpy
+idna
+onnxruntime
